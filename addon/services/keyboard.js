@@ -2,9 +2,8 @@
 import Service from '@ember/service';
 import { A } from '@ember/array';
 import { getOwner } from '@ember/application';
-import { get, getProperties, set } from '@ember/object';
+import { get } from '@ember/object';
 import { computed } from '@ember/object';
-import { filter, filterBy, sort } from '@ember/object/computed';
 import { bind, run } from '@ember/runloop';
 import { keyDown, keyPress, keyUp } from 'ember-keyboard/listeners/key-events';
 import {
@@ -15,24 +14,29 @@ import {
 export default Service.extend({
   isPropagationEnabled: false,
 
-  registeredResponders: computed(() => A()),
+  registeredResponders: null,
 
-  activeResponders: filterBy('registeredResponders', 'keyboardActivated'),
+  get activeResponders() {
+    return this.registeredResponders.filter(r => r.keyboardActivated);
+  },
 
-  sortedRespondersSortDefinition: computed('isPropagationEnabled', function() {
-    return get(this, 'isPropagationEnabled') ?
-      ['keyboardPriority:desc'] :
-      ['keyboardFirstResponder:desc', 'keyboardPriority:desc']
-  }),
+  get sortedRespondersSortDefinition() {
+    return this.isPropagationEnabled ?
+      ['keyboardPriority'] :
+      ['keyboardFirstResponder', 'keyboardPriority']
+  },
 
-  sortedResponders: sort('activeResponders', 'sortedRespondersSortDefinition'),
+  get sortedResponders() {
+    return this.activeResponders.sortBy(...this.sortedRespondersSortDefinition).reverse();
+  },
 
-  firstResponders: filterBy('sortedResponders', 'keyboardFirstResponder'),
+  get firstResponders() {
+    return this.sortedResponders.filter(r => r.keyboardFirstResponder);
+  },
 
-  normalResponders: filter(
-    'sortedResponders.@each.keyboardFirstResponder',
-    responder => !get(responder, 'keyboardFirstResponder')
-  ),
+  get normalResponders() {
+    return this.sortedResponders.filter(r => !r.keyboardFirstResponder);
+  },
 
   init(...args) {
     this._super(...args);
@@ -44,7 +48,8 @@ export default Service.extend({
     const config = getOwner(this).resolveRegistration('config:environment') || {};
 
     const isPropagationEnabled = Boolean(get(config, 'emberKeyboard.propagation'));
-    set(this, 'isPropagationEnabled', isPropagationEnabled);
+    this.isPropagationEnabled = isPropagationEnabled;
+    this.registeredResponders = [];
 
     this._boundRespond = bind(this, this._respond);
     this._listeners = get(config, 'emberKeyboard.listeners') || ['keyUp', 'keyDown', 'keyPress'];
@@ -69,20 +74,23 @@ export default Service.extend({
 
   _respond(event) {
     run(() => {
-      if (get(this, 'isPropagationEnabled')) {
-        handleKeyEventWithPropagation(event, getProperties(this, 'firstResponders', 'normalResponders'));
+      if (this.isPropagationEnabled) {
+        handleKeyEventWithPropagation(event, { firstResponders: this.firstResponders, normalResponders: this.normalResponders });
       } else {
-        handleKeyEventWithLaxPriorities(event, get(this, 'sortedResponders'));
+        handleKeyEventWithLaxPriorities(event, this.sortedResponders);
       }
     });
   },
 
   register(responder) {
-    get(this, 'registeredResponders').pushObject(responder);
+    this.registeredResponders.push(responder);
   },
 
   unregister(responder) {
-    get(this, 'registeredResponders').removeObject(responder);
+    const index = this.registeredResponders.indexOf(responder);
+    if (index > -1) {
+      this.registeredResponders.splice(index, 1);
+    }
   },
 
   keyDown(...args) {
